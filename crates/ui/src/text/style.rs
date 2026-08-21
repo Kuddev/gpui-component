@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use gpui::{App, HighlightStyle, Pixels, Rems, StyleRefinement, px, rems};
 
@@ -41,6 +41,8 @@ pub struct TextViewStyle {
     /// fallback to `cx.theme().accent`, if it is `None`.
     pub inline_code: HighlightStyle,
     pub is_dark: bool,
+    /// Directory used to resolve relative Markdown and HTML image paths.
+    pub image_base: Option<Arc<Path>>,
 }
 
 impl PartialEq for TextViewStyle {
@@ -48,6 +50,7 @@ impl PartialEq for TextViewStyle {
         self.paragraph_gap == other.paragraph_gap
             && self.heading_base_font_size == other.heading_base_font_size
             && self.highlight_theme == other.highlight_theme
+            && self.image_base == other.image_base
     }
 }
 
@@ -63,6 +66,7 @@ impl Default for TextViewStyle {
             table_cell: StyleRefinement::default(),
             inline_code: HighlightStyle::default(),
             is_dark: false,
+            image_base: None,
         }
     }
 }

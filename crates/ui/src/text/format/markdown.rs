@@ -20,6 +20,51 @@ pub(crate) fn parse(source: &str, cx: &mut NodeContext) -> Result<ParsedDocument
         .map_err(|e| e.to_string().into())
 }
 
+/// CommonMark soft breaks render as spaces; adjacent CJK text joins directly.
+fn merge_soft_breaks(value: &str) -> String {
+    if !value.contains(['\n', '\r']) {
+        return value.to_string();
+    }
+
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\n' && c != '\r' {
+            out.push(c);
+            continue;
+        }
+        if c == '\r' && chars.peek() == Some(&'\n') {
+            chars.next();
+        }
+        while chars
+            .peek()
+            .is_some_and(|&next| next == ' ' || next == '\t')
+        {
+            chars.next();
+        }
+        let previous = out.chars().last();
+        let next = chars.peek().copied();
+        let joins_cjk = previous.is_some_and(is_cjk) && next.is_some_and(is_cjk);
+        if previous.is_some() && next.is_some() && !joins_cjk && !out.ends_with(' ') {
+            out.push(' ');
+        }
+    }
+    out
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3000}'..='\u{303F}'
+            | '\u{3040}'..='\u{30FF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '\u{4E00}'..='\u{9FFF}'
+            | '\u{AC00}'..='\u{D7AF}'
+            | '\u{F900}'..='\u{FAFF}'
+            | '\u{FF00}'..='\u{FFEF}'
+    )
+}
+
 fn parse_table_row(table: &mut Table, node: &mdast::TableRow, cx: &mut NodeContext) {
     let mut row = TableRow::default();
     node.children.iter().for_each(|c| {
@@ -172,8 +217,8 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
             });
         }
         Node::Text(val) => {
-            text = val.value.clone();
-            paragraph.push_str(&val.value)
+            text = merge_soft_breaks(&val.value);
+            paragraph.push_str(&text)
         }
         Node::Emphasis(val) => {
             text = merge_children_with_mark(
@@ -531,6 +576,27 @@ mod tests {
                 .any(|(_, mark)| mark.bold && mark.italic),
             "nested emphasis should produce a bold and italic mark"
         );
+    }
+
+    #[test]
+    fn soft_breaks_merge_and_math_nodes_keep_their_source() {
+        assert_eq!(
+            merge_soft_breaks("built in Rust on a\nGPU rendering core"),
+            "built in Rust on a GPU rendering core"
+        );
+        assert_eq!(merge_soft_breaks("中文换行\n继续阅读"), "中文换行继续阅读");
+
+        let mut cx = NodeContext::default();
+        let document = parse("Before $x^2$ after.\n\n$$\ny = mx + b\n$$", &mut cx).unwrap();
+        let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
+            panic!("expected paragraph");
+        };
+        assert_eq!(paragraph.children[1].math.as_deref(), Some("x^2"));
+        let BlockNode::MathBlock { source, fallback } = &document.blocks[1] else {
+            panic!("expected display math");
+        };
+        assert_eq!(source.as_ref(), "y = mx + b");
+        assert_eq!(fallback.code().as_ref(), "y = mx + b");
     }
 
     #[test]

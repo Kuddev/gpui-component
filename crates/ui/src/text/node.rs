@@ -117,6 +117,20 @@ impl BlockNode {
         }
     }
 
+    /// Propagate an HTML wrapper's centered alignment to renderable text blocks.
+    pub(super) fn set_align_center(&mut self) {
+        match self {
+            Self::Paragraph(paragraph) => paragraph.align_center = true,
+            Self::Heading { children, .. } => children.align_center = true,
+            Self::Root { children, .. } => {
+                for child in children {
+                    child.set_align_center();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Get the span of the node.
     pub(crate) fn span(&self) -> Option<Span> {
         match self {
@@ -871,6 +885,9 @@ pub(crate) struct Paragraph {
     /// The key is the identifier, the value is the url.
     pub(super) link_refs: HashMap<SharedString, SharedString>,
 
+    /// GitHub-flavored HTML: `<p align="center">` and centered headings.
+    pub(super) align_center: bool,
+
     pub(crate) state: Arc<Mutex<InlineState>>,
 }
 
@@ -879,6 +896,7 @@ impl PartialEq for Paragraph {
         self.span == other.span
             && self.children == other.children
             && self.link_refs == other.link_refs
+            && self.align_center == other.align_center
     }
 }
 
@@ -888,6 +906,7 @@ impl Paragraph {
             span: None,
             children: vec![InlineNode::new(&text)],
             link_refs: HashMap::new(),
+            align_center: false,
             state: Arc::new(Mutex::new(InlineState::default())),
         }
     }
@@ -1056,6 +1075,7 @@ impl Paragraph {
                 span: None,
                 children: vec![],
                 link_refs: Default::default(),
+                align_center: false,
                 state: Arc::new(Mutex::new(InlineState::default())),
             },
         )
@@ -1345,6 +1365,23 @@ impl PartialEq for NodeContext {
     }
 }
 
+fn image_source(url: &SharedUri, base: Option<&std::path::Path>) -> gpui::ImageSource {
+    let raw: &str = url.as_ref();
+    let lower = raw.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("data:") {
+        return url.clone().into();
+    }
+
+    let path = std::path::Path::new(raw);
+    if path.is_absolute() {
+        return path.to_path_buf().into();
+    }
+    match base {
+        Some(base) => base.join(path).into(),
+        None => url.clone().into(),
+    }
+}
+
 impl Paragraph {
     fn render(&self, node_cx: &NodeContext, window: &mut Window, cx: &mut App) -> AnyElement {
         let span = self.span;
@@ -1422,44 +1459,47 @@ impl Paragraph {
                 }
                 let link_click_handler = node_cx.link_click_handler.clone();
                 child_nodes.push(
-                    img(image.url.clone())
-                        .id(ix)
-                        .object_fit(ObjectFit::Contain)
-                        .max_w(relative(1.))
-                        .when_some(image.width, |this, width| this.w(width))
-                        .when_some(image.link.clone(), |this, link| {
-                            let title = image.title();
-                            let link_click_handler = link_click_handler.clone();
-                            let aux_link = link.clone();
-                            let aux_link_click_handler = link_click_handler.clone();
-                            this.cursor_pointer()
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(title.clone()).build(window, cx)
-                                })
-                                .on_click(move |event, window, cx| {
-                                    window.end_text_selection(cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &link_click_handler,
-                                        link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .on_aux_click(move |event, window, cx| {
-                                    window.end_text_selection(cx);
-                                    cx.stop_propagation();
-                                    handle_link_click(
-                                        &aux_link_click_handler,
-                                        aux_link.url.clone(),
-                                        event.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                })
-                        })
-                        .into_any_element(),
+                    img(image_source(
+                        &image.url,
+                        node_cx.style.image_base.as_deref(),
+                    ))
+                    .id(ix)
+                    .object_fit(ObjectFit::Contain)
+                    .max_w(relative(1.))
+                    .when_some(image.width, |this, width| this.w(width))
+                    .when_some(image.link.clone(), |this, link| {
+                        let title = image.title();
+                        let link_click_handler = link_click_handler.clone();
+                        let aux_link = link.clone();
+                        let aux_link_click_handler = link_click_handler.clone();
+                        this.cursor_pointer()
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(title.clone()).build(window, cx)
+                            })
+                            .on_click(move |event, window, cx| {
+                                window.end_text_selection(cx);
+                                cx.stop_propagation();
+                                handle_link_click(
+                                    &link_click_handler,
+                                    link.url.clone(),
+                                    event.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .on_aux_click(move |event, window, cx| {
+                                window.end_text_selection(cx);
+                                cx.stop_propagation();
+                                handle_link_click(
+                                    &aux_link_click_handler,
+                                    aux_link.url.clone(),
+                                    event.clone(),
+                                    window,
+                                    cx,
+                                );
+                            })
+                    })
+                    .into_any_element(),
                 );
 
                 text.clear();
@@ -1542,9 +1582,12 @@ impl Paragraph {
 
         div()
             .id(span.unwrap_or_default())
-            .when(has_math, |this| {
+            .when(has_math || self.align_center, |this| {
                 // 公式元素是应用提供的独立盒子，需像单词一样参与同行换行和基线对齐。
                 this.flex().flex_row().flex_wrap().items_end()
+            })
+            .when(self.align_center, |this| {
+                this.w_full().min_w_0().justify_center()
             })
             .children(child_nodes)
             .into_any_element()
@@ -1583,7 +1626,7 @@ impl Paragraph {
                 }
 
                 items.push(InlineFlowItem::Image {
-                    url: image.url.clone(),
+                    source: image_source(&image.url, node_cx.style.image_base.as_deref()),
                     link: image.link.clone(),
                     title: image.title(),
                     width: image.width,
@@ -2369,6 +2412,7 @@ impl BlockNode {
                     .whitespace_normal()
                     .text_size(text_size)
                     .font_weight(font_weight)
+                    .when(children.align_center, |this| this.w_full())
                     .child(children.render(node_cx, window, cx))
                     .into_any_element()
             }
@@ -2536,6 +2580,7 @@ mod tests {
             span: None,
             children,
             link_refs: HashMap::new(),
+            align_center: false,
             state: Arc::new(Mutex::new(InlineState::default())),
         };
         if let Ok(mut state) = paragraph.state.lock() {
@@ -2769,6 +2814,7 @@ mod tests {
             span: None,
             children: vec![InlineNode::image(image)],
             link_refs: HashMap::new(),
+            align_center: false,
             state: Arc::new(Mutex::new(InlineState::default())),
         }
     }

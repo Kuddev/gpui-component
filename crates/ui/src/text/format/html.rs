@@ -101,6 +101,11 @@ fn attr_value(attrs: &RefCell<Vec<html5ever::Attribute>>, name: LocalName) -> Op
     })
 }
 
+fn attr_is_center(attrs: &RefCell<Vec<html5ever::Attribute>>) -> bool {
+    attr_value(attrs, local_name!("align"))
+        .is_some_and(|value| value.eq_ignore_ascii_case("center"))
+}
+
 /// Get the highlight background color for a `<mark>` element.
 ///
 /// Reads the `color` attribute first, then the `background-color` declaration
@@ -442,6 +447,7 @@ fn parse_node(
                     .unwrap_or(6) as u8;
 
                 let mut paragraph = Paragraph::default();
+                paragraph.align_center = attr_is_center(attrs);
                 for child in node.children.borrow().iter() {
                     parse_paragraph(&mut paragraph, child);
                 }
@@ -463,9 +469,6 @@ fn parse_node(
                 }
             }
             local_name!("img") => {
-                let mut children = vec![];
-                consume_paragraph(&mut children, paragraph);
-
                 let Some(src) = attr_value(attrs, local_name!("src")) else {
                     if cfg!(debug_assertions) {
                         tracing::warn!("image node missing src attribute");
@@ -477,7 +480,6 @@ fn parse_node(
                 let title = attr_value(&attrs, local_name!("title"));
                 let (width, height) = attr_width_height(&attrs);
 
-                let mut paragraph = Paragraph::default();
                 paragraph.push_image(ImageNode {
                     url: src.into(),
                     link: None,
@@ -486,16 +488,7 @@ fn parse_node(
                     width,
                     height,
                 });
-
-                if children.len() > 0 {
-                    children.push(BlockNode::Paragraph(paragraph));
-                    Some(BlockNode::Root {
-                        children,
-                        span: None,
-                    })
-                } else {
-                    Some(BlockNode::Paragraph(paragraph))
-                }
+                None
             }
             local_name!("ul") | local_name!("ol") => {
                 let ordered = name.local == local_name!("ol");
@@ -580,6 +573,7 @@ fn parse_node(
             local_name!("style") | local_name!("script") => None,
             _ => {
                 if BLOCK_ELEMENTS.contains(&name.local.trim()) {
+                    let centered = attr_is_center(attrs);
                     let mut children: Vec<BlockNode> = vec![];
 
                     // Case:
@@ -592,10 +586,18 @@ fn parse_node(
                     // Inner of the block element -- The "Inner text of block element"
                     for child in node.children.borrow().iter() {
                         if let Some(child_node) = parse_node(child, paragraph, cx) {
+                            // 块节点必须排在此前已累积的行内文本之后，避免 A<br>B 变成 <br>AB。
+                            consume_paragraph(&mut children, paragraph);
                             children.push(child_node);
                         }
                     }
                     consume_paragraph(&mut children, paragraph);
+
+                    if centered {
+                        for child in &mut children {
+                            child.set_align_center();
+                        }
+                    }
 
                     if children.is_empty() {
                         None
@@ -747,6 +749,61 @@ mod tests {
             "#}
             .trim()
         );
+    }
+
+    #[test]
+    fn centered_badges_share_one_paragraph() {
+        let mut cx = NodeContext::default();
+        let document = super::parse(
+            r#"<p align="center"><img src="a.svg"><img src="b.svg"><img src="c.svg"></p>"#,
+            &mut cx,
+        )
+        .unwrap();
+        let [BlockNode::Paragraph(paragraph)] = document.blocks.as_slice() else {
+            panic!("expected one badge paragraph: {:?}", document.blocks);
+        };
+        assert!(paragraph.align_center);
+        assert_eq!(
+            paragraph
+                .children
+                .iter()
+                .filter(|child| child.image.is_some())
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn flow_html_break_preserves_document_order() {
+        let mut cx = NodeContext::default();
+        let document = super::parse("<p>first<br>second</p>", &mut cx).unwrap();
+        let [BlockNode::Root { children, .. }] = document.blocks.as_slice() else {
+            panic!("expected root block: {:?}", document.blocks);
+        };
+        let [
+            BlockNode::Paragraph(first),
+            BlockNode::Break { .. },
+            BlockNode::Paragraph(second),
+        ] = children.as_slice()
+        else {
+            panic!("expected paragraph/break/paragraph: {children:?}");
+        };
+        if first.text() != "first" {
+            panic!("expected leading paragraph");
+        }
+        if second.text() != "second" {
+            panic!("expected trailing paragraph");
+        }
+    }
+
+    #[test]
+    fn heading_align_center_is_preserved() {
+        let mut cx = NodeContext::default();
+        let document = super::parse(r#"<h1 align="center">Title</h1>"#, &mut cx).unwrap();
+        let [BlockNode::Heading { children, .. }] = document.blocks.as_slice() else {
+            panic!("expected heading");
+        };
+        assert!(children.align_center);
     }
 
     #[test]

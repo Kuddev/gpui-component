@@ -3,6 +3,7 @@ mod format;
 mod inline;
 mod inline_flow;
 mod markdown_ext;
+mod math;
 mod node;
 pub(crate) mod selection;
 mod state;
@@ -13,6 +14,7 @@ mod window_selection;
 
 use gpui::{App, ElementId, IntoElement, RenderOnce, SharedString, Window};
 pub use markdown_ext::*;
+pub use math::{MathSpec, set_math_renderer};
 pub use state::*;
 pub use style::*;
 pub use text_view::*;

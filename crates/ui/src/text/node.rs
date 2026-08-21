@@ -69,6 +69,12 @@ pub(crate) enum BlockNode {
         span: Option<Span>,
     },
     CodeBlock(CodeBlock),
+    /// Display math. Rendering remains application-owned; `fallback` preserves
+    /// the upstream code-block behavior when no renderer accepts the formula.
+    MathBlock {
+        source: SharedString,
+        fallback: CodeBlock,
+    },
     /// A custom Markdown node produced by [`MarkdownExtensions`].
     Custom(MarkdownNode),
     Table(Table),
@@ -121,6 +127,7 @@ impl BlockNode {
             BlockNode::List { span, .. } => *span,
             BlockNode::ListItem { span, .. } => *span,
             BlockNode::CodeBlock(code_block) => code_block.span,
+            BlockNode::MathBlock { fallback, .. } => fallback.span,
             BlockNode::Custom(el) => el.span,
             BlockNode::Table(table) => table.span,
             BlockNode::Break { span, .. } => *span,
@@ -266,6 +273,24 @@ impl BlockNode {
                     text.push('\n');
                 }
             }
+            BlockNode::MathBlock { fallback, .. } => {
+                let block_text = match kind {
+                    BlockTextKind::All => fallback.text(),
+                    BlockTextKind::Selected => fallback.selected_text(),
+                    BlockTextKind::SelectedSource => {
+                        let selected = fallback.selected_text();
+                        if selected.is_empty() {
+                            String::new()
+                        } else {
+                            format!("$$\n{}\n$$", selected.trim_end_matches('\n'))
+                        }
+                    }
+                };
+                if !block_text.is_empty() {
+                    text.push_str(&block_text);
+                    text.push('\n');
+                }
+            }
             BlockNode::Custom(node) => {
                 if let BlockTextKind::All = kind {
                     let content = node.as_text();
@@ -318,7 +343,11 @@ impl BlockNode {
                     .iter()
                     .any(|cell| cell.children.has_selection())
             }),
-            BlockNode::CodeBlock(code_block) => code_block.has_selection(),
+            BlockNode::CodeBlock(code_block)
+            | BlockNode::MathBlock {
+                fallback: code_block,
+                ..
+            } => code_block.has_selection(),
             BlockNode::Custom { .. }
             | BlockNode::Definition { .. }
             | BlockNode::Break { .. }
@@ -346,7 +375,11 @@ impl BlockNode {
                     }
                 }
             }
-            BlockNode::CodeBlock(code_block) => code_block.clear_selection(),
+            BlockNode::CodeBlock(code_block)
+            | BlockNode::MathBlock {
+                fallback: code_block,
+                ..
+            } => code_block.clear_selection(),
             BlockNode::Custom { .. }
             | BlockNode::Definition { .. }
             | BlockNode::Break { .. }
@@ -480,6 +513,9 @@ pub(crate) struct InlineNode {
     /// The text content.
     pub(crate) text: SharedString,
     pub(crate) image: Option<ImageNode>,
+    /// Inline TeX source. `text` mirrors it so the normal code-styled fallback
+    /// and plain-text selection continue to work without an app renderer.
+    pub(crate) math: Option<SharedString>,
     /// The text styles, each tuple contains the range of the text and the style.
     pub(crate) marks: Vec<(Range<usize>, TextMark)>,
 
@@ -488,7 +524,10 @@ pub(crate) struct InlineNode {
 
 impl PartialEq for InlineNode {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.image == other.image && self.marks == other.marks
+        self.text == other.text
+            && self.image == other.image
+            && self.math == other.math
+            && self.marks == other.marks
     }
 }
 
@@ -581,11 +620,17 @@ fn emit_run(
         }
         selected.emitted = true;
 
-        out.push_str(&reconstruct_markdown(
-            &child.text,
-            &child.marks,
-            (lo - start)..(hi - start),
-        ));
+        if child.math.is_some() {
+            out.push('$');
+            out.push_str(&child.text[(lo - start)..(hi - start)]);
+            out.push('$');
+        } else {
+            out.push_str(&reconstruct_markdown(
+                &child.text,
+                &child.marks,
+                (lo - start)..(hi - start),
+            ));
+        }
     }
 
     selected
@@ -787,6 +832,7 @@ impl InlineNode {
         Self {
             text: text.into(),
             image: None,
+            math: None,
             marks: vec![],
             state: Arc::new(Mutex::new(InlineState::default())),
         }
@@ -795,6 +841,14 @@ impl InlineNode {
     pub(crate) fn image(image: ImageNode) -> Self {
         let mut this = Self::new("");
         this.image = Some(image);
+        this
+    }
+
+    pub(crate) fn math(source: impl Into<SharedString>) -> Self {
+        let source = source.into();
+        let mut this = Self::new(source.clone());
+        this.marks = vec![(0..source.len(), TextMark::default().code())];
+        this.math = Some(source);
         this
     }
 
@@ -1292,7 +1346,7 @@ impl PartialEq for NodeContext {
 }
 
 impl Paragraph {
-    fn render(&self, node_cx: &NodeContext, _window: &mut Window, cx: &mut App) -> AnyElement {
+    fn render(&self, node_cx: &NodeContext, window: &mut Window, cx: &mut App) -> AnyElement {
         let span = self.span;
         let children = &self.children;
 
@@ -1306,6 +1360,7 @@ impl Paragraph {
         }
 
         let mut child_nodes: Vec<AnyElement> = vec![];
+        let mut has_math = false;
 
         let mut text = String::new();
         let mut highlights: Vec<(Range<usize>, HighlightStyle)> = vec![];
@@ -1314,6 +1369,38 @@ impl Paragraph {
 
         let mut ix = 0;
         for inline_node in children {
+            if let Some(source) = &inline_node.math {
+                let spec = super::math::MathSpec {
+                    source: source.clone(),
+                    display: false,
+                };
+                if let Some(element) = super::math::render_math(&spec, window, cx) {
+                    if !text.is_empty() {
+                        if let Ok(mut state) = inline_node.state.lock() {
+                            state.set_text(text.clone().into());
+                        }
+                        child_nodes.push(
+                            Inline::new(
+                                ix,
+                                inline_node.state.clone(),
+                                links.clone(),
+                                highlights.clone(),
+                                node_cx.link_click_handler.clone(),
+                            )
+                            .into_any_element(),
+                        );
+                        text.clear();
+                        links.clear();
+                        highlights.clear();
+                        offset = 0;
+                    }
+                    child_nodes.push(element);
+                    has_math = true;
+                    ix += 1;
+                    continue;
+                }
+            }
+
             let text_len = inline_node.text.len();
             text.push_str(&inline_node.text);
 
@@ -1455,6 +1542,10 @@ impl Paragraph {
 
         div()
             .id(span.unwrap_or_default())
+            .when(has_math, |this| {
+                // 公式元素是应用提供的独立盒子，需像单词一样参与同行换行和基线对齐。
+                this.flex().flex_row().flex_wrap().items_end()
+            })
             .children(child_nodes)
             .into_any_element()
     }
@@ -1462,7 +1553,9 @@ impl Paragraph {
     fn should_render_inline_flow(&self) -> bool {
         let has_image = self.children.iter().any(|child| child.image.is_some());
         let has_text = self.children.iter().any(|child| !child.text.is_empty());
-        has_image && has_text
+        let has_math = self.children.iter().any(|child| child.math.is_some());
+        // InlineFlow 尚不认识应用提供的公式元素；含公式时走普通段落渲染路径。
+        has_image && has_text && !has_math
     }
 
     fn inline_flow_items(&self, node_cx: &NodeContext, cx: &mut App) -> Vec<InlineFlowItem> {
@@ -1578,6 +1671,10 @@ impl Paragraph {
             .children
             .iter()
             .map(|text_node| {
+                if let Some(source) = &text_node.math {
+                    return format!("${}$", source);
+                }
+
                 let mut text = text_node.text.to_string();
                 for (range, style) in &text_node.marks {
                     if style.bold {
@@ -1691,6 +1788,7 @@ impl BlockNode {
                     code_block.code()
                 )
             }
+            BlockNode::MathBlock { source, .. } => format!("$$\n{}\n$$", source),
             BlockNode::Table(table) => {
                 let header = table
                     .children
@@ -1879,6 +1977,7 @@ impl BlockNode {
                             | BlockNode::Heading { .. }
                             | BlockNode::Blockquote { .. }
                             | BlockNode::CodeBlock(_)
+                            | BlockNode::MathBlock { .. }
                             | BlockNode::Custom(_)
                             | BlockNode::Table(_)
                             | BlockNode::HorizontalRule { .. } => {
@@ -2327,6 +2426,24 @@ impl BlockNode {
                 })
                 .into_any_element(),
             BlockNode::CodeBlock(code_block) => code_block.render(&options, node_cx, window, cx),
+            BlockNode::MathBlock { source, fallback } => {
+                let spec = super::math::MathSpec {
+                    source: source.clone(),
+                    display: true,
+                };
+                match super::math::render_math(&spec, window, cx) {
+                    Some(element) => div()
+                        .id(("math-block", ix))
+                        .w_full()
+                        .pb(mb)
+                        .flex()
+                        .flex_row()
+                        .justify_center()
+                        .child(element)
+                        .into_any_element(),
+                    None => fallback.render(&options, node_cx, window, cx),
+                }
+            }
             BlockNode::Custom(node) => {
                 let inner = match node_cx.markdown_extensions.render_block(node, window, cx) {
                     Some(rendered) => rendered,

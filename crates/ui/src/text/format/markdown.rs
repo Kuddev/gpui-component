@@ -228,9 +228,7 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
         }
         Node::InlineMath(raw) => {
             text = raw.value.clone();
-            paragraph.push(
-                InlineNode::new(&text).marks(vec![(0..text.len(), TextMark::default().code())]),
-            );
+            paragraph.push(InlineNode::math(&text));
         }
         Node::MdxTextExpression(raw) => {
             text = raw.value.clone();
@@ -393,11 +391,10 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
                 span: new_span(val.position, cx),
             }
         }
-        Node::Math(val) => BlockNode::CodeBlock(CodeBlock::new(
-            val.value.into(),
-            None,
-            new_span(val.position, cx),
-        )),
+        Node::Math(val) => BlockNode::MathBlock {
+            source: val.value.clone().into(),
+            fallback: CodeBlock::new(val.value.into(), None, new_span(val.position, cx)),
+        },
         Node::Html(val) => match super::html::parse(&val.value, cx) {
             Ok(el) => BlockNode::Root {
                 children: el.blocks,

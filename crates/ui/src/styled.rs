@@ -41,6 +41,19 @@ pub fn box_shadow(
     }
 }
 
+/// 透明或亚克力窗口会放大 `shadow-lg` 的双层黑色扩散，因此弹出层统一使用
+/// 与 Nebula 菜单高度一致的单层紧凑阴影，避免背景下方出现明显黑块。
+#[inline]
+pub fn popover_shadow(dark: bool) -> Vec<BoxShadow> {
+    vec![box_shadow(
+        px(0.),
+        px(2.),
+        px(8.),
+        px(-4.),
+        gpui::hsla(0., 0., 0., if dark { 0.28 } else { 0.12 }),
+    )]
+}
+
 macro_rules! font_weight {
     ($fn:ident, $const:ident) => {
         /// [docs](https://tailwindcss.com/docs/font-weight)

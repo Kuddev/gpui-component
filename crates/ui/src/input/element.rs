@@ -236,6 +236,17 @@ impl Element for EditorScrollbar {
     }
 }
 
+// Match GPUI's rendered text at fractional display scales. Window::line_height
+// rounds to whole logical pixels, which can change document height on activation.
+fn input_line_height(window: &Window) -> Pixels {
+    let style = window.text_style();
+    window.pixel_snap(
+        style
+            .line_height
+            .to_pixels(style.font_size, window.rem_size()),
+    )
+}
+
 fn clamp_auto_grow_vertical_scroll_offset(
     mode: &InputMode,
     scroll_top: Pixels,
@@ -1569,7 +1580,7 @@ impl Element for TextElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let state = self.state.read(cx);
-        let line_height = window.line_height();
+        let line_height = input_line_height(window);
 
         let mut style = Style::default();
         style.size.width = relative(1.).into();
@@ -1665,7 +1676,7 @@ impl Element for TextElement {
         }
 
         let state = self.state.read(cx);
-        let line_height = window.line_height();
+        let line_height = input_line_height(window);
 
         let (visible_range, visible_buffer_lines, visible_top) =
             self.calculate_visible_range(&state, line_height, bounds.size.height);
@@ -2045,7 +2056,7 @@ impl Element for TextElement {
         });
 
         // Paint multi line text
-        let line_height = window.line_height();
+        let line_height = input_line_height(window);
         let origin = bounds.origin;
 
         let invisible_top_padding = prepaint.last_layout.visible_top;

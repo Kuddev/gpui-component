@@ -2188,6 +2188,17 @@ impl InputState {
         self.select_to(end, cx);
     }
 
+    /// Return the UTF-8 offset nearest a window point using the painted input layout.
+    ///
+    /// This has the same clamping and wrapping behavior as a native mouse press.
+    /// Returns `None` before the input has painted, so callers can defer a click
+    /// handoff without confusing unavailable geometry with the start of the text.
+    pub fn offset_for_point(&self, position: Point<Pixels>) -> Option<usize> {
+        self.last_bounds.as_ref()?;
+        self.last_layout.as_ref()?;
+        Some(self.index_for_mouse_position(position))
+    }
+
     pub(crate) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         // If the text is empty, always return 0
         if self.text.len() == 0 {

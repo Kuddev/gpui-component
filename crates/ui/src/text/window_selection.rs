@@ -835,6 +835,13 @@ impl Element for TextSelectionController {
         });
 
         window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if event.pressed_button != Some(MouseButton::Left) {
+                if phase.capture() {
+                    // 窗口外释放或子控件消费 MouseUp 后，用实际按键状态结束拖选，保留已有选区。
+                    Root::update(window, cx, |root, _, cx| root.end_text_selection(cx));
+                }
+                return;
+            }
             if !phase.bubble() {
                 return;
             }
@@ -843,8 +850,9 @@ impl Element for TextSelectionController {
             });
         });
 
-        window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
-            if !phase.bubble() {
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            // 释放必须先于子控件处理，避免冒泡被截断后选区继续跟随鼠标。
+            if !phase.capture() || event.button != MouseButton::Left {
                 return;
             }
             Root::update(window, cx, |root, _, cx| root.end_text_selection(cx));
@@ -882,7 +890,8 @@ mod tests {
     use gpui::{
         AppContext as _, Context, Entity, FocusHandle, InteractiveElement as _, IntoElement,
         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, ParentElement as _, Render,
-        Styled as _, TestAppContext, VisualTestContext, Window, div, point, px,
+        Styled as _, TestAppContext, VisualTestContext, Window, div, point,
+        prelude::FluentBuilder as _, px,
     };
     use std::cell::Cell;
     use std::rc::Rc;
@@ -900,6 +909,7 @@ mod tests {
         /// Blank gap between the two views, used to anchor a selection in blank
         /// space (the proxy-anchored endpoint path).
         mid_gap: gpui::Pixels,
+        consume_release: bool,
     }
 
     impl ChatTestView {
@@ -911,6 +921,7 @@ mod tests {
                 second_selectable,
                 top_offset: px(10.),
                 mid_gap: px(0.),
+                consume_release: false,
             }
         }
     }
@@ -939,7 +950,10 @@ mod tests {
                 .child(
                     div()
                         .h(px(40.))
-                        .child(TextView::new(&self.second).selectable(self.second_selectable)),
+                        .child(TextView::new(&self.second).selectable(self.second_selectable))
+                        .when(self.consume_release, |view| {
+                            view.on_mouse_up(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        }),
                 )
                 // A 20px region below the views that owns its press the way
                 // Input/Button do: its bubble-phase handler sets the suppress
@@ -971,6 +985,54 @@ mod tests {
             let _ = window.draw(cx);
         });
         (chat, cx)
+    }
+
+    #[gpui::test]
+    fn movement_without_a_button_ends_drag_and_preserves_selection(cx: &mut TestAppContext) {
+        let (_, cx) = setup(true, cx);
+        cx.simulate_mouse_down(
+            point(px(0.), px(15.)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_mouse_move(
+            point(px(35.), px(15.)),
+            Some(MouseButton::Left),
+            Modifiers::default(),
+        );
+        let selected = window_selected_text(cx);
+        assert!(!selected.is_empty());
+
+        // Deliberately omit MouseUp, as when the platform releases outside the window.
+        cx.simulate_mouse_move(point(px(300.), px(70.)), None, Modifiers::default());
+        assert_eq!(window_selected_text(cx), selected);
+        cx.update(|window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                assert!(!root.text_selection.is_selecting)
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn child_consuming_mouse_up_does_not_leave_a_window_drag(cx: &mut TestAppContext) {
+        let (chat, cx) = setup(true, cx);
+        cx.update(|window, cx| {
+            chat.update(cx, |chat, cx| {
+                chat.consume_release = true;
+                cx.notify();
+            });
+            let _ = window.draw(cx);
+        });
+        drag(cx, point(px(0.), px(15.)), point(px(300.), px(70.)));
+        let selected = window_selected_text(cx);
+        assert!(selected.contains("Second message"));
+        cx.update(|window, cx| {
+            Root::update(window, cx, |root, _, _| {
+                assert!(!root.text_selection.is_selecting)
+            });
+        });
+        cx.simulate_mouse_move(point(px(5.), px(15.)), None, Modifiers::default());
+        assert_eq!(window_selected_text(cx), selected);
     }
 
     /// A `scrollable(true)` TextView virtualizes its blocks, so a block only

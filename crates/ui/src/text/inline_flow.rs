@@ -19,6 +19,7 @@ use crate::{
 
 use super::{
     inline::{Inline, InlineState},
+    inline_background::InlineBackground,
     node::LinkMark,
 };
 
@@ -28,6 +29,8 @@ pub(super) struct InlineFlow {
     id: ElementId,
     items: Vec<InlineFlowItem>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    code_radius: Pixels,
+    backgrounds: Vec<Option<InlineBackground>>,
 }
 
 pub(super) enum InlineFlowItem {
@@ -114,7 +117,14 @@ impl InlineFlow {
             id: id.into(),
             items,
             link_click_handler,
+            code_radius: px(0.),
+            backgrounds: Vec::new(),
         }
+    }
+
+    pub(super) fn inline_code_radius(mut self, radius: Pixels) -> Self {
+        self.code_radius = radius;
+        self
     }
 
     fn image_element(
@@ -191,7 +201,41 @@ impl Element for InlineFlow {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let measure_items = self.items.iter().map(MeasureItem::from).collect::<Vec<_>>();
+        self.backgrounds = self
+            .items
+            .iter()
+            .map(|item| match item {
+                InlineFlowItem::Text {
+                    text, highlights, ..
+                } => InlineBackground::new(text.clone(), highlights, self.code_radius),
+                _ => None,
+            })
+            .collect();
+        let measure_items = self
+            .items
+            .iter()
+            .zip(&self.backgrounds)
+            .map(|(item, background)| {
+                let mut measure = MeasureItem::from(item);
+                if let (
+                    MeasureItem::Text {
+                        text,
+                        links,
+                        highlights,
+                    },
+                    Some(background),
+                ) = (&mut measure, background)
+                {
+                    *text = background.text.clone();
+                    *highlights = background.highlights.clone();
+                    for (range, _) in links {
+                        *range = background.display_offset(range.start)
+                            ..background.display_offset(range.end);
+                    }
+                }
+                measure
+            })
+            .collect::<Vec<_>>();
         let line_height = window.line_height();
         let rem_size = window.rem_size();
         let image_sizes = measure_items
@@ -276,26 +320,40 @@ impl Element for InlineFlow {
                     highlights,
                     ..
                 } => {
+                    let background = self.backgrounds[item_ix]
+                        .as_ref()
+                        .map(|background| background.slice(source_range.clone()));
+                    let original_range = self.backgrounds[item_ix]
+                        .as_ref()
+                        .map_or(source_range.clone(), |background| {
+                            background.source_range(source_range.clone())
+                        });
                     let state = match &self.items[item_ix] {
                         InlineFlowItem::Text {
                             state,
                             text: source,
                             ..
-                        } if source_range == (0..source.len()) => state.clone(),
+                        } if original_range == (0..source.len()) => state.clone(),
                         _ => Arc::new(Mutex::new(InlineState::default())),
                     };
                     if let Ok(mut state) = state.lock() {
-                        state.set_text(text);
+                        state.set_text(
+                            background
+                                .as_ref()
+                                .map_or(text.clone(), |background| background.source.clone()),
+                        );
                     }
 
-                    let mut element = Inline::new(
+                    let mut inline = Inline::new(
                         elements.len(),
                         state,
                         links,
                         highlights,
                         self.link_click_handler.clone(),
                     )
-                    .into_any_element();
+                    .prepared_background(background);
+                    inline.set_display_text(text);
+                    let mut element = inline.into_any_element();
                     element.prepaint_as_root(
                         bounds.origin + origin,
                         size(

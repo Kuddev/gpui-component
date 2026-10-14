@@ -1393,6 +1393,7 @@ impl Paragraph {
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
             )
+            .inline_code_radius(node_cx.style.inline_code_radius)
             .into_any_element();
         }
 
@@ -1424,6 +1425,7 @@ impl Paragraph {
                                 highlights.clone(),
                                 node_cx.link_click_handler.clone(),
                             )
+                            .inline_code_radius(node_cx.style.inline_code_radius)
                             .into_any_element(),
                         );
                         text.clear();
@@ -1454,6 +1456,7 @@ impl Paragraph {
                             highlights.clone(),
                             node_cx.link_click_handler.clone(),
                         )
+                        .inline_code_radius(node_cx.style.inline_code_radius)
                         .into_any_element(),
                     );
                 }
@@ -1576,6 +1579,7 @@ impl Paragraph {
                     highlights,
                     node_cx.link_click_handler.clone(),
                 )
+                .inline_code_radius(node_cx.style.inline_code_radius)
                 .into_any_element(),
             );
         }

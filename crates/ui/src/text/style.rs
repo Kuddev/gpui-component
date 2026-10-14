@@ -40,6 +40,9 @@ pub struct TextViewStyle {
     /// Default is [`HighlightStyle::default()`], the `background_color` will
     /// fallback to `cx.theme().accent`, if it is `None`.
     pub inline_code: HighlightStyle,
+    /// Rounded inline highlights with font-relative horizontal padding. Zero
+    /// retains the legacy glyph-run rendering; copied text never contains padding.
+    pub inline_code_radius: Pixels,
     pub is_dark: bool,
     /// Directory used to resolve relative Markdown and HTML image paths.
     pub image_base: Option<Arc<Path>>,
@@ -51,6 +54,8 @@ impl PartialEq for TextViewStyle {
             && self.heading_base_font_size == other.heading_base_font_size
             && self.highlight_theme == other.highlight_theme
             && self.image_base == other.image_base
+            && self.inline_code == other.inline_code
+            && self.inline_code_radius == other.inline_code_radius
     }
 }
 
@@ -65,6 +70,7 @@ impl Default for TextViewStyle {
             table: StyleRefinement::default(),
             table_cell: StyleRefinement::default(),
             inline_code: HighlightStyle::default(),
+            inline_code_radius: px(0.),
             is_dark: false,
             image_base: None,
         }

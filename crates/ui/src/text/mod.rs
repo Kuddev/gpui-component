@@ -1,6 +1,7 @@
 mod document;
 mod format;
 mod inline;
+mod inline_background;
 mod inline_flow;
 mod markdown_ext;
 mod math;

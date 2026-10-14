@@ -12,6 +12,7 @@ use gpui::{
     SharedString, StyledText, TextLayout, Window, point, px, quad,
 };
 
+use super::inline_background::InlineBackground;
 use crate::{
     ActiveTheme, WindowExt as _,
     global_state::GlobalState,
@@ -31,6 +32,7 @@ pub(super) struct Inline {
     links: Rc<Vec<(Range<usize>, LinkMark)>>,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
     styled_text: StyledText,
+    background: Option<Arc<InlineBackground>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
 
     state: Arc<Mutex<InlineState>>,
@@ -71,9 +73,41 @@ impl Inline {
             highlights,
             text: text.clone(),
             styled_text: StyledText::new(text),
+            background: None,
             link_click_handler,
             state,
         }
+    }
+
+    pub(super) fn inline_code_radius(mut self, radius: Pixels) -> Self {
+        if let Some(background) = InlineBackground::new(self.text.clone(), &self.highlights, radius)
+        {
+            self.links = Rc::new(
+                self.links
+                    .iter()
+                    .map(|(range, link)| {
+                        (
+                            background.display_offset(range.start)
+                                ..background.display_offset(range.end),
+                            link.clone(),
+                        )
+                    })
+                    .collect(),
+            );
+            self.text = background.text.clone();
+            self.highlights = background.highlights.clone();
+            self.background = Some(Arc::new(background));
+        }
+        self
+    }
+
+    pub(super) fn prepared_background(mut self, background: Option<InlineBackground>) -> Self {
+        self.background = background.map(Arc::new);
+        self
+    }
+
+    pub(super) fn set_display_text(&mut self, text: SharedString) {
+        self.text = text;
     }
 
     /// Get link at given mouse position.
@@ -412,6 +446,9 @@ impl Element for Inline {
         };
 
         let text_layout = self.styled_text.layout().clone();
+        if let Some(background) = &self.background {
+            background.paint(&text_layout, window, cx);
+        }
         self.styled_text
             .paint(global_id, None, bounds, &mut (), &mut (), window, cx);
 
@@ -419,7 +456,13 @@ impl Element for Inline {
         let (is_selectable, is_selection, selection) =
             self.layout_selections(&text_layout, &bounds, window, cx);
 
-        state.selection = selection;
+        state.selection = selection.map(|selection| {
+            self.background.as_ref().map_or(selection, |background| {
+                background
+                    .source_range(selection.start..selection.end)
+                    .into()
+            })
+        });
 
         if is_selection || is_selectable {
             window.set_cursor_style(CursorStyle::IBeam, &hitbox);
@@ -431,7 +474,7 @@ impl Element for Inline {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
         }
 
-        if let Some(selection) = &state.selection {
+        if let Some(selection) = &selection {
             Self::paint_selection(selection, &text_layout, &bounds, window, cx);
         }
 
@@ -455,6 +498,8 @@ impl Element for Inline {
                 let text_layout = text_layout.clone();
                 let inline_state = self.state.clone();
                 let text = self.text.clone();
+                let source = state.text.clone();
+                let background = self.background.clone();
                 let text_view_state = GlobalState::global(cx).text_view_state().cloned();
                 move |event: &MouseDownEvent, phase, window, cx| {
                     if !phase.bubble()
@@ -480,7 +525,10 @@ impl Element for Inline {
                         return;
                     };
 
-                    let selected_text = text[range.clone()].to_string();
+                    let range = background
+                        .as_ref()
+                        .map_or(range.clone(), |background| background.source_range(range));
+                    let selected_text = source[range.clone()].to_string();
 
                     if let Ok(mut inline_state) = inline_state.lock() {
                         inline_state.selection = Some(range.into());

@@ -250,6 +250,10 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
             let link_mark = Some(LinkMark {
                 url: val.url.clone().into(),
                 title: val.title.clone().map(|s| s.into()),
+                source_range: val
+                    .position
+                    .as_ref()
+                    .map(|p| cx.offset + p.start.offset..cx.offset + p.end.offset),
                 ..Default::default()
             });
 
@@ -313,6 +317,10 @@ fn parse_paragraph(paragraph: &mut Paragraph, node: &mdast::Node, cx: &mut NodeC
                 url: "".into(),
                 title: link.label.clone().map(Into::into),
                 identifier: Some(link.identifier.clone().into()),
+                source_range: link
+                    .position
+                    .as_ref()
+                    .map(|p| cx.offset + p.start.offset..cx.offset + p.end.offset),
             };
 
             text = merge_children_with_mark(
@@ -528,6 +536,7 @@ fn ast_to_node(source: &str, value: mdast::Node, cx: &mut NodeContext) -> BlockN
                     url: def.url.clone().into(),
                     identifier: Some(def.identifier.clone().into()),
                     title: def.title.clone().map(Into::into),
+                    source_range: None,
                 },
             );
 
@@ -553,6 +562,30 @@ mod tests {
     use gpui::ParentElement;
 
     use crate::text::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
+
+    #[test]
+    fn link_occurrences_retain_source_ranges_with_incremental_offset() {
+        let source = "[same](https://example.com) [same][ref]\n\n[ref]: https://example.com";
+        let mut cx = NodeContext {
+            offset: 37,
+            ..Default::default()
+        };
+        let document = parse(source, &mut cx).unwrap();
+        let BlockNode::Paragraph(paragraph) = &document.blocks[0] else {
+            panic!("paragraph")
+        };
+        let ranges = paragraph
+            .children
+            .iter()
+            .flat_map(|child| &child.marks)
+            .filter_map(|(_, mark)| mark.link.as_ref()?.source_range.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ranges, vec![37..64, 65..76]);
+        assert_eq!(
+            &source[ranges[1].start - 37..ranges[1].end - 37],
+            "[same][ref]"
+        );
+    }
 
     #[test]
     fn test_nested_emphasis_merges_text_marks() {

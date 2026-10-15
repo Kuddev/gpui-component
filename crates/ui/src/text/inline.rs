@@ -34,6 +34,7 @@ pub(super) struct Inline {
     styled_text: StyledText,
     background: Option<Arc<InlineBackground>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    link_hover_handler: Option<Arc<super::LinkHoverHandlerFn>>,
 
     state: Arc<Mutex<InlineState>>,
 }
@@ -75,6 +76,7 @@ impl Inline {
             styled_text: StyledText::new(text),
             background: None,
             link_click_handler,
+            link_hover_handler: None,
             state,
         }
     }
@@ -103,6 +105,14 @@ impl Inline {
 
     pub(super) fn prepared_background(mut self, background: Option<InlineBackground>) -> Self {
         self.background = background.map(Arc::new);
+        self
+    }
+
+    pub(super) fn link_hover_handler(
+        mut self,
+        handler: Option<Arc<super::LinkHoverHandlerFn>>,
+    ) -> Self {
+        self.link_hover_handler = handler;
         self
     }
 
@@ -470,8 +480,36 @@ impl Element for Inline {
 
         // link cursor pointer
         let mouse_position = window.mouse_position();
-        if let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position) {
+        if hitbox.is_hovered(window)
+            && let Some(_) = Self::link_for_position(&text_layout, &self.links, mouse_position)
+        {
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
+            if self.link_hover_handler.is_some() {
+                if let Some((range, _)) = self.links.iter().find(|(range, _)| {
+                    text_layout
+                        .index_for_position(mouse_position)
+                        .is_ok_and(|i| range.contains(&i))
+                }) {
+                    // 只叠加当前链接的下划线，不改文字度量、换行和选区身份。
+                    for (offset, ch) in self.text[range.clone()].char_indices() {
+                        let index = range.start + offset;
+                        let Some(start) = text_layout.position_for_index(index) else {
+                            continue;
+                        };
+                        let end = text_layout.position_for_index(index + ch.len_utf8());
+                        let width = end
+                            .filter(|end| end.y == start.y)
+                            .map_or(text_layout.line_height().half(), |end| end.x - start.x);
+                        window.paint_quad(gpui::fill(
+                            Bounds::new(
+                                point(start.x, start.y + text_layout.line_height() - px(2.)),
+                                gpui::size(width, px(2.)),
+                            ),
+                            cx.theme().link,
+                        ));
+                    }
+                }
+            }
         }
 
         if let Some(selection) = &selection {
@@ -543,21 +581,78 @@ impl Element for Inline {
             });
         }
 
+        if self.links.is_empty() {
+            return;
+        }
+        // InlineFlow 会重建换行片段；悬停归窗口元素所有，不能依赖临时的选区状态。
+        let hover_state = global_id.map(|id| {
+            window.with_element_state::<Arc<Mutex<Option<(SharedString, Option<Range<usize>>)>>> , _>(id, |state, _| {
+                let state = state.unwrap_or_default();
+                (state.clone(), state)
+            })
+        }).unwrap_or_default();
+        let hover_owner = global_id.cloned();
+        let hover_view = GlobalState::global(cx).text_view_state().cloned();
         // mouse move, update hovered link
         window.on_mouse_event({
             let hitbox = hitbox.clone();
             let text_layout = text_layout.clone();
-            let mut hovered_index = state.hovered_index;
+            let links = self.links.clone();
+            let handler = self.link_hover_handler.clone();
             move |event: &MouseMoveEvent, phase, window, cx| {
-                if !phase.bubble() || !hitbox.is_hovered(window) {
+                if !phase.bubble() {
                     return;
                 }
-
-                let current = hovered_index;
-                let updated = text_layout.index_for_position(event.position).ok();
-                //  notify update when hovering over different links
-                if current != updated {
-                    hovered_index = updated;
+                let updated = if hitbox.is_hovered(window) && event.pressed_button.is_none() {
+                    text_layout
+                        .index_for_position(event.position)
+                        .ok()
+                        .and_then(|offset| {
+                            links.iter().position(|(range, _)| range.contains(&offset))
+                        })
+                } else {
+                    None
+                };
+                let identity = updated.map(|index| {
+                    (
+                        links[index].1.url.clone(),
+                        links[index].1.source_range.clone(),
+                    )
+                });
+                let changed = if let Ok(mut state) = hover_state.lock() {
+                    let changed = *state != identity;
+                    *state = identity;
+                    changed
+                } else {
+                    false
+                };
+                if changed {
+                    // 片段之间交接时，旧片段的离开事件不能清除新片段已取得的悬停。
+                    let owns_hover = hover_view.as_ref().is_none_or(|view| {
+                        view.update(cx, |state, _| {
+                            if updated.is_some() {
+                                state.link_hover_owner = hover_owner.clone();
+                                true
+                            } else if state.link_hover_owner == hover_owner {
+                                state.link_hover_owner = None;
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    });
+                    if owns_hover && let Some(handler) = &handler {
+                        handler(
+                            updated.map(|index| super::TextLinkHover {
+                                url: links[index].1.url.clone(),
+                                source_range: links[index].1.source_range.clone(),
+                                position: event.position,
+                                line_height: text_layout.line_height(),
+                            }),
+                            window,
+                            cx,
+                        );
+                    }
                     cx.notify(current_view);
                 }
             }

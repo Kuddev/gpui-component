@@ -29,6 +29,7 @@ pub(super) struct InlineFlow {
     id: ElementId,
     items: Vec<InlineFlowItem>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    link_hover_handler: Option<Arc<super::LinkHoverHandlerFn>>,
     code_radius: Pixels,
     backgrounds: Vec<Option<InlineBackground>>,
 }
@@ -117,6 +118,7 @@ impl InlineFlow {
             id: id.into(),
             items,
             link_click_handler,
+            link_hover_handler: None,
             code_radius: px(0.),
             backgrounds: Vec::new(),
         }
@@ -124,6 +126,14 @@ impl InlineFlow {
 
     pub(super) fn inline_code_radius(mut self, radius: Pixels) -> Self {
         self.code_radius = radius;
+        self
+    }
+
+    pub(super) fn link_hover_handler(
+        mut self,
+        handler: Option<Arc<super::LinkHoverHandlerFn>>,
+    ) -> Self {
+        self.link_hover_handler = handler;
         self
     }
 
@@ -351,6 +361,7 @@ impl Element for InlineFlow {
                         highlights,
                         self.link_click_handler.clone(),
                     )
+                    .link_hover_handler(self.link_hover_handler.clone())
                     .prepared_background(background);
                     inline.set_display_text(text);
                     let mut element = inline.into_any_element();

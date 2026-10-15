@@ -410,6 +410,7 @@ pub struct LinkMark {
     /// Optional identifier for footnotes.
     pub identifier: Option<SharedString>,
     pub title: Option<SharedString>,
+    pub source_range: Option<Range<usize>>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -1348,6 +1349,7 @@ pub(crate) struct NodeContext {
     pub(crate) style: TextViewStyle,
     pub(crate) code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     pub(crate) link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    pub(crate) link_hover_handler: Option<Arc<super::LinkHoverHandlerFn>>,
     pub(crate) markdown_extensions: Arc<MarkdownExtensions>,
 }
 
@@ -1393,6 +1395,7 @@ impl Paragraph {
                 self.inline_flow_items(node_cx, cx),
                 node_cx.link_click_handler.clone(),
             )
+            .link_hover_handler(node_cx.link_hover_handler.clone())
             .inline_code_radius(node_cx.style.inline_code_radius)
             .into_any_element();
         }
@@ -1425,6 +1428,7 @@ impl Paragraph {
                                 highlights.clone(),
                                 node_cx.link_click_handler.clone(),
                             )
+                            .link_hover_handler(node_cx.link_hover_handler.clone())
                             .inline_code_radius(node_cx.style.inline_code_radius)
                             .into_any_element(),
                         );
@@ -1456,6 +1460,7 @@ impl Paragraph {
                             highlights.clone(),
                             node_cx.link_click_handler.clone(),
                         )
+                        .link_hover_handler(node_cx.link_hover_handler.clone())
                         .inline_code_radius(node_cx.style.inline_code_radius)
                         .into_any_element(),
                     );
@@ -1550,7 +1555,9 @@ impl Paragraph {
                         // convert link references, replace link
                         if let Some(identifier) = link_mark.identifier.as_ref() {
                             if let Some(mark) = node_cx.link_refs.get(identifier) {
+                                let source_range = link_mark.source_range.clone();
                                 link_mark = mark.clone();
+                                link_mark.source_range = source_range;
                             }
                         }
 
@@ -1579,6 +1586,7 @@ impl Paragraph {
                     highlights,
                     node_cx.link_click_handler.clone(),
                 )
+                .link_hover_handler(node_cx.link_hover_handler.clone())
                 .inline_code_radius(node_cx.style.inline_code_radius)
                 .into_any_element(),
             );
@@ -1682,7 +1690,9 @@ impl Paragraph {
                         if let Some(identifier) = link_mark.identifier.as_ref()
                             && let Some(mark) = node_cx.link_refs.get(identifier)
                         {
+                            let source_range = link_mark.source_range.clone();
                             link_mark = mark.clone();
+                            link_mark.source_range = source_range;
                         }
 
                         links.push((inner_range.clone(), link_mark));

@@ -22,6 +22,18 @@ pub(crate) type CodeBlockActionsFn =
 pub(crate) type LinkClickHandlerFn =
     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
 
+/// A resolved link occurrence; source_range addresses the original Markdown input.
+#[derive(Clone, Debug)]
+pub struct TextLinkHover {
+    pub url: SharedString,
+    pub source_range: Option<std::ops::Range<usize>>,
+    pub position: gpui::Point<Pixels>,
+    pub line_height: Pixels,
+}
+
+pub(crate) type LinkHoverHandlerFn =
+    dyn Fn(Option<TextLinkHover>, &mut Window, &mut App) + Send + Sync;
+
 pub(crate) fn handle_link_click(
     handler: &Option<Arc<LinkClickHandlerFn>>,
     url: SharedString,
@@ -71,6 +83,7 @@ pub struct TextView {
     scrollable: bool,
     code_block_actions: Option<Arc<CodeBlockActionsFn>>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
+    link_hover_handler: Option<Arc<LinkHoverHandlerFn>>,
     markdown_extensions: Arc<MarkdownExtensions>,
 }
 
@@ -112,6 +125,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             link_click_handler: None,
+            link_hover_handler: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -130,6 +144,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             link_click_handler: None,
+            link_hover_handler: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -148,6 +163,7 @@ impl TextView {
             scrollable: false,
             code_block_actions: None,
             link_click_handler: None,
+            link_hover_handler: None,
             markdown_extensions: Arc::default(),
         }
     }
@@ -214,6 +230,15 @@ impl TextView {
         F: Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync + 'static,
     {
         self.link_click_handler = Some(Arc::new(handler));
+        self
+    }
+
+    /// Observe precise link hover without replacing text selection or click handling.
+    pub fn on_link_hover<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(Option<TextLinkHover>, &mut Window, &mut App) + Send + Sync + 'static,
+    {
+        self.link_hover_handler = Some(Arc::new(handler));
         self
     }
 
@@ -331,6 +356,7 @@ impl Element for TextView {
         state.update(cx, |state, cx| {
             state.code_block_actions = self.code_block_actions.clone();
             state.link_click_handler = self.link_click_handler.clone();
+            state.link_hover_handler = self.link_hover_handler.clone();
             state.set_markdown_extensions(self.markdown_extensions.clone(), cx);
             state.selectable = self.selectable;
             state.selection_format = self.selection_format;
@@ -603,6 +629,76 @@ mod tests {
         cx.simulate_click(point(px(10.), px(34.)), Modifiers::default());
 
         assert_eq!(cx.opened_url(), None);
+    }
+
+    #[gpui::test]
+    fn wrapped_inline_link_hover_survives_redraw_and_reports_authored_occurrence(
+        cx: &mut TestAppContext,
+    ) {
+        use super::TextLinkHover;
+        use std::sync::{Arc, Mutex};
+        struct HoverRoot {
+            events: Arc<Mutex<Vec<Option<TextLinkHover>>>>,
+        }
+        const SOURCE: &str = "[aaaaaaaaaaaaaaaaaaaaaaaa](https://example.com) ![image](https://example.com/image.svg) [bbbbbbbbbbbbbbbbbbbbbbbb][ref]\n\n[ref]: https://example.com";
+        impl Render for HoverRoot {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let events = self.events.clone();
+                div().w(px(128.)).child(
+                    TextView::markdown("hover-links", SOURCE)
+                        .selectable(true)
+                        .on_link_hover(move |event, _, _| events.lock().unwrap().push(event)),
+                )
+            }
+        }
+        cx.update(crate::init);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = events.clone();
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let content = cx.new(|_| HoverRoot { events });
+            crate::Root::new(content, window, cx)
+        });
+        let cx: &mut VisualTestContext = cx;
+        cx.run_until_parked();
+        let bounds = cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+            crate::Root::read(window, cx)
+                .selectable_text_inlines
+                .values()
+                .next()
+                .unwrap()
+                .clone()
+        });
+        assert!(
+            bounds.len() > 2,
+            "fixture must use wrapped InlineFlow fragments"
+        );
+        cx.simulate_mouse_move(bounds[0].center(), None, Modifiers::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.draw(cx).clear(cx);
+        });
+        cx.simulate_mouse_move(bounds.last().unwrap().center(), None, Modifiers::default());
+        cx.run_until_parked();
+        {
+            let events = captured.lock().unwrap();
+            let hovered = events
+                .last()
+                .unwrap()
+                .as_ref()
+                .expect("new fragment keeps hover ownership");
+            assert_eq!(hovered.url, "https://example.com");
+            assert_eq!(
+                &SOURCE[hovered.source_range.clone().unwrap()],
+                "[bbbbbbbbbbbbbbbbbbbbbbbb][ref]"
+            );
+        }
+        cx.simulate_mouse_move(point(px(600.), px(600.)), None, Modifiers::default());
+        cx.run_until_parked();
+        assert!(
+            captured.lock().unwrap().last().unwrap().is_none(),
+            "leave after redraw must close hover"
+        );
     }
 
     #[gpui::test]

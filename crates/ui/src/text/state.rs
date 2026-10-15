@@ -186,8 +186,8 @@ impl TextViewState {
         this
     }
 
-    /// Get the text content.
-    pub(crate) fn source(&self) -> SharedString {
+    /// Get the parsed source addressed by link hover ranges.
+    pub fn source(&self) -> SharedString {
         self.parsed_content.document.source.clone()
     }
 
@@ -721,8 +721,11 @@ fn parse_content(
         content.document.source =
             format!("{}{}", content.document.source, options.pending_text).into();
         content.document.blocks.extend(new_document.blocks);
+        content.node_cx.link_refs.extend(node_cx.link_refs);
     } else {
         content.document = new_document;
+        // 解析阶段已收集定义；丢掉上下文会让引用链接悬停和点击得到空 URL。
+        content.node_cx = node_cx;
     }
 
     Ok(content)

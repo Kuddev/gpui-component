@@ -34,11 +34,11 @@ gpui-component-macros = { path = "crates/macros", version = "0.5.1" }
 gpui-component-assets = { path = "crates/assets", version = "0.5.1" }
 story = { path = "crates/story" }
 
-gpui = { git = "https://github.com/Kuddev/zed", rev = "1e716d16ec54b361499931b4278903cdcaae8949" }
-gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "1e716d16ec54b361499931b4278903cdcaae8949", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
-gpui_web = { git = "https://github.com/Kuddev/zed", rev = "1e716d16ec54b361499931b4278903cdcaae8949" }
-gpui_macros = { git = "https://github.com/Kuddev/zed", rev = "1e716d16ec54b361499931b4278903cdcaae8949" }
-reqwest_client = { git = "https://github.com/Kuddev/zed", rev = "1e716d16ec54b361499931b4278903cdcaae8949" }
+gpui = { git = "https://github.com/Kuddev/zed", rev = "22fc166ba3b524aedb41bdba5a45bdd1c9146393" }
+gpui_platform = { git = "https://github.com/Kuddev/zed", rev = "22fc166ba3b524aedb41bdba5a45bdd1c9146393", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui_web = { git = "https://github.com/Kuddev/zed", rev = "22fc166ba3b524aedb41bdba5a45bdd1c9146393" }
+gpui_macros = { git = "https://github.com/Kuddev/zed", rev = "22fc166ba3b524aedb41bdba5a45bdd1c9146393" }
+reqwest_client = { git = "https://github.com/Kuddev/zed", rev = "22fc166ba3b524aedb41bdba5a45bdd1c9146393" }
 sum-tree = { version = "0.2.0", package = "zed-sum-tree" }
 # reqwest = { version = "0.12.15-zed", package = "zed-reqwest" }
 reqwest = { git = "https://github.com/zed-industries/reqwest.git", rev = "c15662463bda39148ba154100dd44d3fba5873a4", default-features = false, features = [
